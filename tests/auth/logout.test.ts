@@ -1,5 +1,4 @@
 
-import { POST } from "@/app/api/auth/logout/route";
 import { expect, test, vi, beforeEach } from "vitest";
 
 const setMock = vi.fn();
@@ -8,30 +7,35 @@ const fakeCookieStore = {
   set: setMock,
 };
 
-vi.mock('next/headers', () => {
-    return {
-        cookies: async () => fakeCookieStore,
-    };
+vi.mock("next/headers", () => {
+  return {
+    cookies: async () => fakeCookieStore,
+  };
 });
+
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((to: string) => {
+    throw new Error(`NEXT_REDIRECT:${to}`);
+  }),
+}));
 
 beforeEach(() => {
-    vi.clearAllMocks();
+  vi.clearAllMocks();
 });
 
+import { logout } from "@/action/auth/logout";
 
-test('logout', async () => {
-    const response = await POST();
-    const body = await response.json();
+test("logout", async () => {
 
-    expect(response.status).toBe(200);
-    expect(body).toEqual({ ok: true });
-    expect(setMock).toHaveBeenCalledTimes(1);
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "auth_token",
-        value: "",
-        httpOnly: true,
-        maxAge: 0,
-      })
-    );
+  await expect(logout()).rejects.toThrow(
+    "NEXT_REDIRECT:/"
+  );
+  expect(setMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name: "auth_token",
+      value: "",
+      path: '/',
+      maxAge: 0,
+    })
+  );
 });

@@ -1,100 +1,163 @@
-import {vi, beforeEach, test, expect} from "vitest";
+import { vi, beforeEach, test, expect, describe } from "vitest";
+import { COOKIE_NAME, MAX_AGE_SECONDS } from "@/constants";
 
-vi.mock('@/lib/prisma');
+vi.mock("bcrypt");
 
-vi.mock('bcrypt');  
-import prisma from "@/lib/prisma";
-import { POST } from "@/app/api/auth/login/route";
+const setMock = vi.fn();
+const fakeCookieStore = {
+  get: vi.fn(),
+  set: setMock
+};
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    user: {
+      findUnique: vi.fn(),
+    },
+  },
+}));
+
+
+
+vi.mock("next/headers", () => {
+  return {
+    cookies: async() => fakeCookieStore,
+  }
+});
+
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((to: string) => {
+    throw new Error(`NEXT_REDIRECT:${to}`);
+  }),
+}));
+
+
+vi.mock("jsonwebtoken", () => ({
+  default: { sign: vi.fn(() => "token") },
+  sign: vi.fn(() => "token"),
+}));
+
+import { prisma } from "@/lib/prisma";
+import { loginAction } from "@/action/auth/login";
 import bcrypt from "bcrypt";
+import * as session from "@/lib/auth/session";
+import { redirect } from "next/navigation";
 
 beforeEach(() => {
-    vi.clearAllMocks();
+  vi.clearAllMocks();
 });
 
-test('return 200 and set cookie for valid credentials', async () => {
-    prisma.user.findUnique = vi.fn().mockResolvedValue({
-        id: 'user-1',
-        email: 'john.doe@gmail.com',
-        passwordHash: 'hashed',
-        role: 'COACH',
-        name: 'John',
-        surname: 'Doe',
-    });
+function makeFormData(values: Record<string, string>) {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(values)) fd.set(k, v);
+  return fd;
+}
 
-    bcrypt.compare = vi.fn().mockResolvedValue(true);
+const user1 = {
+    id: "user-1",
+    email: "john.doe@gmail.com",
+    passwordHash: "hashed",
+    role: "COACH" as const,
+    name: "John",
+    surename: "Doe",
+    createdAt: new Date(),
+}
 
-    const req = {
-        json: async () => ({
-            email: 'john.doe@gmail.com',
-            password: 'dsfgdf',
-        }),
-    } as Request;
+describe("loginAction", () => {
+  const initialState = {
+    fieldErrors: {},
+    formError: null,
+    success: false,
+  };
 
-    const res = await POST(req);
-    const body = await res.json();
-    const setCookie = res.headers.get("set-cookie");
+  test("create session", async () => {
 
-    expect(body).toHaveProperty('token');
-    expect(body).toHaveProperty('expiresIn', 3600);
+    vi.spyOn(session, "createSession");
 
-    expect(res.status).toBe(200);
-    expect(setCookie).toBeTruthy();
-    expect(setCookie).toContain("auth_token=");
-    expect(setCookie).toMatch(/HttpOnly/i);
+    const fd = makeFormData({ email: "john.doe@gmail.com", password: "goodpass" });
+
+    (bcrypt.compare as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(user1);
+
+    await expect(loginAction(initialState, fd)).rejects.toThrow(
+      "NEXT_REDIRECT:/coach/appointments"
+    );
+    expect(setMock).toHaveBeenCalledTimes(1);
+    expect(redirect).toHaveBeenCalledWith("/coach/appointments");
+    expect(session.createSession).toHaveBeenCalledWith("token");
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: COOKIE_NAME,
+        value: "token",
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: MAX_AGE_SECONDS,
+        sameSite: "lax",
+      })
+    );
+  });
+
+test("invalid credentials", async () => {
+  const fd = makeFormData({
+    email: "john.doe@gmail.com",
+    password: "wrongpass",
+  });
+
+  vi.mocked(prisma.user.findUnique).mockResolvedValue(user1);
+  
+  (bcrypt.compare as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+  const result = await loginAction(initialState, fd);
+
+  expect(result.success).toBe(false);
+  expect(result.formError).toBe(
+    "Login failed. Please check your credentials and try again."
+  );
+
+  expect(setMock).not.toHaveBeenCalled();
+  expect(redirect).not.toHaveBeenCalled();
 });
 
-test('return 401 for invalid credentials', async () => {
-    prisma.user.findUnique = vi.fn().mockResolvedValue({
-        id: 'user-1',
-        email: 'john.doe@gmail.com',
-        passwordHash: 'hashed',
-        role: 'COACH',
-        name: 'John',
-        surname: 'Doe',
-    });
 
-    bcrypt.compare = vi.fn().mockResolvedValue(false);
+test("missing email or password", async () => {
+  const fd = makeFormData({
+    email: "john.doe@gmail.com",
+  });
 
-    const req = {
-        json: async () => ({
-            email: 'john.doe@gmail.com',
-            password: 'wrong-password',
-        }),
-    } as Request;
+  const result = await loginAction(initialState, fd);
 
-    const res = await POST(req);
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body).toEqual({ message: 'Invalid credentials' });
+  expect(result.success).toBe(false);
+  expect(result.formError).toBe(
+    "Please correct the errors in the form."
+  );
 
+  expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  expect(setMock).not.toHaveBeenCalled();
+  expect(redirect).not.toHaveBeenCalled();
 });
 
-test('return 400 for missing email or password', async () => {
-    const req = {
-        json: async () => ({
-            email: '',
-            password: '',
-        }),
-    } as Request;
+test("non-existing user", async () => {
+  const fd = makeFormData({
+    email: "john.doe@gmail.com",
+    password: "goodpass",
+  });
 
-    const res = await POST(req);
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body).toEqual({ message: 'Email or pasword is missing' });
+  vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+
+  const result = await loginAction(initialState, fd);
+
+  expect(result.success).toBe(false);
+  expect(result.formError).toBe(
+    "Login failed. Please check your credentials and try again."
+  );
+
+  expect(bcrypt.compare).not.toHaveBeenCalled();
+  expect(setMock).not.toHaveBeenCalled();
+  expect(redirect).not.toHaveBeenCalled();
 });
 
-test('return 401 for non-existing user', async () => {
-    prisma.user.findUnique = vi.fn().mockResolvedValue(null);
 
-    const req = {
-        json: async () => ({
-            email: 'john.doe@gmail.com',
-            password: 'wrong-password',
-        }),
-    } as Request;
-
-    const res = await POST(req);
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body).toEqual({ message: 'Invalid credentials' });
-});    
+})

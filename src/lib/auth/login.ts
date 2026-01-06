@@ -1,4 +1,4 @@
-import "server-only";
+"use server";
 import { SECRET_KEY, TOKEN_EXPIRATION_IN } from "@/constants";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcrypt";
