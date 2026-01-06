@@ -9,7 +9,11 @@
     "lint": "eslint",
     "test": "vitest",
     "test:run": "vitest run",
-    "seed": "prisma db seed"
+    "seed": "prisma db seed",
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev",
+    "studio": "prisma studio --config ./prisma.config.ts",
+    "format": "prettier --write ."
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -40,11 +44,17 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "jsdom": "^27.3.0",
+    "prettier": "^3.7.4",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^4.0.16",
     "vitest-mock-extended": "^3.1.0"
+  },
+  "browser": {
+    "fs": false,
+    "os": false,
+    "patch": false
   }
 }
